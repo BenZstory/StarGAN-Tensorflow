@@ -9,15 +9,16 @@ import random
 
 class ImageData:
 
-    def __init__(self, load_size, channels, data_path, selected_attrs, augment_flag=False):
+    def __init__(self, load_size, channels, data_path, dataset_name, selected_attrs, augment_flag=False):
         self.load_size = load_size
         self.channels = channels
         self.augment_flag = augment_flag
         self.selected_attrs = selected_attrs
+        self.dataset_name = dataset_name
 
         self.data_path = os.path.join(data_path, 'train')
         check_folder(self.data_path)
-        self.lines = open(os.path.join(data_path, 'list_attr_celeba.txt'), 'r').readlines()
+        self.lines = open(os.path.join(data_path, 'list_attr.txt'), 'r').readlines()
 
         self.train_dataset = []
         self.train_dataset_label = []
@@ -72,7 +73,7 @@ class ImageData:
                 else :
                     label.append(0.0)
 
-            if i < 2000 :
+            if i < min(2000, int(len(lines) * 0.05)) :
                 self.test_dataset.append(filename)
                 self.test_dataset_label.append(label)
             else :
@@ -80,8 +81,8 @@ class ImageData:
                 self.train_dataset_label.append(label)
             # ['./dataset/celebA/train/019932.jpg', [1, 0, 0, 0, 1]]
 
-        self.test_dataset_fix_label = create_labels(self.test_dataset_label, self.selected_attrs)
-        self.train_dataset_fix_label = create_labels(self.train_dataset_label, self.selected_attrs)
+        self.test_dataset_fix_label = create_labels(self.test_dataset_label, self.selected_attrs, dataset_name = self.dataset_name)
+        self.train_dataset_fix_label = create_labels(self.train_dataset_label, self.selected_attrs, dataset_name = self.dataset_name)
 
         print('\n Finished preprocessing the CelebA dataset...')
 
@@ -149,7 +150,12 @@ def show_all_variables():
 def str2bool(x):
     return x.lower() in ('true')
 
-def create_labels(c_org, selected_attrs=None):
+def create_labels(c_org, selected_attrs=None, dataset_name="celebA"):
+    if dataset_name.startswith("icons"):
+        eye = np.eye(len(selected_attrs))
+        c_trg_list = np.tile(eye, (len(c_org), 1, 1))
+        return c_trg_list
+
     """Generate target domain labels for debugging and testing."""
     # Get hair color indices.
     c_org = np.asarray(c_org)
@@ -173,6 +179,6 @@ def create_labels(c_org, selected_attrs=None):
 
         c_trg_list.append(c_trg)
 
-    c_trg_list = np.transpose(c_trg_list, axes=[1, 0, 2]) # [c_dim, bs, ch]
+    c_trg_list = np.transpose(c_trg_list, axes=[1, 0, 2])  # from [c_dim, bs, ch] to [bs, c_dim, ch]
 
     return c_trg_list

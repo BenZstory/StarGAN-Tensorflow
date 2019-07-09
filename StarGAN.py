@@ -4,11 +4,13 @@ import time
 from tensorflow.contrib.data import prefetch_to_device, shuffle_and_repeat, map_and_batch
 import numpy as np
 from glob import glob
+from datetime import datetime
 
 class StarGAN(object) :
     def __init__(self, sess, args):
         self.model_name = 'StarGAN'
         self.sess = sess
+        self.args_dict = vars(args)
         self.checkpoint_dir = args.checkpoint_dir
         self.sample_dir = args.sample_dir
         self.result_dir = args.result_dir
@@ -49,6 +51,21 @@ class StarGAN(object) :
 
         self.img_size = args.img_size
         self.img_ch = args.img_ch
+
+        """ working on dir params """
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        n_res = str(self.n_res) + 'resblock'
+        n_dis = str(self.n_dis) + 'dis'
+        self.model_dir = "{}_{}_{}_{}_{}_{}".format(self.model_name, self.dataset_name, self.gan_type,
+                                                    n_res, n_dis, current_time)
+
+        self.sample_dir = os.path.join(args.sample_dir, self.model_dir)
+        check_folder(os.path.join(self.sample_dir, "imgs"))
+
+        self.checkpoint_dir = os.path.join(args.checkpoint_dir, self.model_dir)
+        self.log_dir = os.path.join(args.log_dir, self.model_dir)
+
+        self.total_sample_path = os.path.join(os.path.join(self.sample_dir, "_total_samples.html"))
 
         print()
 
@@ -179,7 +196,7 @@ class StarGAN(object) :
         self.lr = tf.placeholder(tf.float32, name='learning_rate')
 
         """ Input Image"""
-        Image_data_class = ImageData(load_size=self.img_size, channels=self.img_ch, data_path=self.dataset_path, selected_attrs=self.selected_attrs, augment_flag=self.augment_flag)
+        Image_data_class = ImageData(load_size=self.img_size, channels=self.img_ch, data_path=self.dataset_path, dataset_name=self.dataset_name, selected_attrs=self.selected_attrs, augment_flag=self.augment_flag)
         Image_data_class.preprocess()
 
         train_dataset_num = len(Image_data_class.train_dataset)
@@ -207,11 +224,15 @@ class StarGAN(object) :
         label_trg = tf.random_shuffle(label_org) # Target domain labels
         label_fix_list = tf.transpose(label_fix_list, perm=[1, 0, 2])
 
+        self.label_org = label_org
+        self.label_trg = label_trg
+        self.label_fix_list = label_fix_list
+
         self.x_test, test_label_org, test_label_fix_list = test_dataset_iterator.get_next()  # Input image / Original domain labels
         test_label_fix_list = tf.transpose(test_label_fix_list, perm=[1, 0, 2])
 
         self.custom_image = tf.placeholder(tf.float32, [1, self.img_size, self.img_size, self.img_ch], name='custom_image') # Custom Image
-        custom_label_fix_list = tf.transpose(create_labels(self.custom_label, self.selected_attrs), perm=[1, 0, 2])
+        custom_label_fix_list = tf.transpose(create_labels(self.custom_label, self.selected_attrs, self.dataset_name), perm=[1, 0, 2])
 
         """ Define Generator, Discriminator """
         x_fake = self.generator(self.x_real, label_trg) # real a
@@ -272,14 +293,17 @@ class StarGAN(object) :
 
 
     def train(self):
+        self.write_args_to_html()
+
         # initialize all variables
         tf.global_variables_initializer().run()
+
 
         # saver to save model
         self.saver = tf.train.Saver()
 
         # summary writer
-        self.writer = tf.summary.FileWriter(self.log_dir + '/' + self.model_dir, self.sess.graph)
+        self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
 
         # restore check-point if it exits
         could_load, checkpoint_counter = self.load(self.checkpoint_dir)
@@ -294,14 +318,15 @@ class StarGAN(object) :
             counter = 1
             print(" [!] Load failed...")
 
-        self.sample_dir = os.path.join(self.sample_dir, self.model_dir)
-        check_folder(self.sample_dir)
 
         # loop for epoch
         start_time = time.time()
         past_g_loss = -1.
         lr = self.init_lr
         for epoch in range(start_epoch, self.epoch):
+            with open(self.total_sample_path, 'a') as t_html:
+                t_html.write('<h3> samples of epoch {:03d} : </h3>'.format(epoch))
+
             if self.decay_flag :
                 lr = self.init_lr if epoch < self.decay_epoch else self.init_lr * (self.epoch - epoch) / (self.epoch - self.decay_epoch) # linear decay
 
@@ -318,8 +343,17 @@ class StarGAN(object) :
                 g_loss = None
                 if (counter - 1) % self.n_critic == 0 :
                     real_images, fake_images, _, g_loss, summary_str = self.sess.run([self.x_real, self.x_fake_list, self.g_optimizer, self.g_loss, self.g_summary_loss], feed_dict = train_feed_dict)
+
+                    # real_images, fake_images, _, g_loss, summary_str, \
+                    # label_org, label_trg, label_fix_list = self.sess.run(
+                    #     [self.x_real, self.x_fake_list, self.g_optimizer, self.g_loss, self.g_summary_loss,
+                    #      self.label_org, self.label_trg, self.label_fix_list], feed_dict=train_feed_dict)
                     self.writer.add_summary(summary_str, counter)
                     past_g_loss = g_loss
+
+                # print("BENZ label_org      = ", label_org)
+                # print("BENZ label_trg      = ", label_trg)
+                # print("BENZ label_fix_list = ", label_fix_list)
 
                 # display training status
                 counter += 1
@@ -333,10 +367,16 @@ class StarGAN(object) :
                     fake_image = np.transpose(fake_images, axes=[1, 0, 2, 3, 4])[0] # [bs, c_dim, h, w, ch]
 
                     save_images(real_image, [1, 1],
-                                './{}/real_{:03d}_{:05d}.png'.format(self.sample_dir, epoch, idx+1))
+                                './{}/imgs/real_{:03d}_{:05d}.png'.format(self.sample_dir, epoch, idx+1))
 
                     save_images(fake_image, [1, self.c_dim],
-                                './{}/fake_{:03d}_{:05d}.png'.format(self.sample_dir, epoch, idx+1))
+                                './{}/imgs/fake_{:03d}_{:05d}.png'.format(self.sample_dir, epoch, idx+1))
+
+                    real_img_str = '<img style="margin-right:10px" src="imgs/real_{:03d}_{:05d}.png">'.format(epoch, idx+1)
+                    fake_img_str = '<img src="imgs/fake_{:03d}_{:05d}.png"> </br>'.format(epoch, idx+1)
+
+                    with open(self.total_sample_path, 'a') as t_html:
+                        t_html.write(real_img_str + fake_img_str)
 
                 if np.mod(idx + 1, self.save_freq) == 0:
                     self.save(self.checkpoint_dir, counter)
@@ -348,18 +388,16 @@ class StarGAN(object) :
             # save model for final step
             self.save(self.checkpoint_dir, counter)
 
-    @property
-    def model_dir(self):
-        n_res = str(self.n_res) + 'resblock'
-        n_dis = str(self.n_dis) + 'dis'
 
-        return "{}_{}_{}_{}_{}".format(self.model_name, self.dataset_name,
-                                       self.gan_type,
-                                       n_res, n_dis)
+    def write_args_to_html(self):
+        body = ""
+        for k, v in self.args_dict.items():
+            body = body + "--" + str(k) + " " + str(v) + " \\<br>"
+        with open(self.total_sample_path, 'a') as t_html:
+            t_html.write("python3 main.py \\<br>")
+            t_html.write(body)
 
     def save(self, checkpoint_dir, step):
-        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
-
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
 
@@ -368,7 +406,6 @@ class StarGAN(object) :
     def load(self, checkpoint_dir):
         import re
         print(" [*] Reading checkpoints...")
-        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
 
         ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
         if ckpt and ckpt.model_checkpoint_path:
